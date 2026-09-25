@@ -1,0 +1,75 @@
+extensions:
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    timeout: 10s
+    create_directory: true
+    directory_permissions: "0750"
+    compaction:
+      on_start: true
+      directory: /var/lib/otelcol/queue/compaction
+
+receivers:
+  filelog/alerts:
+    include: [/var/ossec/logs/alerts/alerts.json]
+    start_at: end
+    storage: file_storage/queue
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%Y-%m-%dT%H:%M:%S.%f%z'
+      - type: add
+        field: attributes.log_type
+        value: alert
+
+  filelog/archives:
+    include: [/var/ossec/logs/archives/archives.json]
+    start_at: end
+    storage: file_storage/queue
+    operators:
+      - type: json_parser
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%Y-%m-%dT%H:%M:%S.%f%z'
+      - type: add
+        field: attributes.log_type
+        value: archive
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 2000
+  resource:
+    attributes:
+      - key: source
+        value: wazuh-manager
+        action: insert
+
+exporters:
+  clickhouse:
+    endpoint: tcp://192.168.1.34:19000?dial_timeout=10s
+    database: wazuh
+    username: default
+    password: ${env:CLICKHOUSE_PASSWORD}
+    logs_table_name: wazuh_logs
+    ttl: 720h
+    compress: lz4
+    async_insert: true
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 10000
+      storage: file_storage/queue
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 60s
+      max_elapsed_time: 0
+
+service:
+  extensions: [file_storage/queue]
+  pipelines:
+    logs:
+      receivers: [filelog/alerts, filelog/archives]
+      processors: [resource, batch]
+      exporters: [clickhouse]
